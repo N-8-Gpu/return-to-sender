@@ -187,7 +187,9 @@ class InvoiceConfig:
     # not a Calgary per-incident cost -- no such figure exists [U1]. u_f is set well below
     # the naive average to reflect that most incidents are minor and a few are catastrophic;
     # sweep u_f over roughly $50k-$2M for sensitivity, not a point estimate.
-    u_sort: float = 250.0  # $/tonne sorting/material-recovery cost baseline; ASSUMPTION
+    u_sort: float = 80.0  # $/tonne sorting/material-recovery cost baseline; ASSUMPTION
+    # kept below price_spread.mu (100, 180) so the destroyed-material-value line item
+    # isn't structurally zero -- it should sometimes bite, not always floor at 0
     modulation_ratio: float = 1.4  # embedded stewardship fee / removable fee; ASSUMPTION
 
 
