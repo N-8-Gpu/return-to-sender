@@ -47,8 +47,9 @@ if not run_clicked:
 cfg = Config(seed=int(seed))
 rng = np.random.default_rng(cfg.seed)
 t_deposit = int(t_deposit_input) if deposit_on else None
-tau_effective = tau if active_channels["tags"] else 0.0
-scenario = simulate(cfg, rng, t_deposit=t_deposit, tau=tau_effective)
+cfg.phi_dynamics.t_deposit = t_deposit
+cfg.tag.tau = tau if active_channels["tags"] else 0.0
+scenario = simulate(cfg, rng)
 truth, obs = scenario["truth"], scenario["obs"]
 
 try:

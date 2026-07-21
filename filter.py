@@ -35,6 +35,32 @@ dynamics use, convert to natural units only when recording results.)
 active_channels: dict mapping channel name -> bool, e.g.
 {'audits': True, 'depots': True, 'fires': False, 'prices': True,
  'mailbox': True, 'compactor': True, 'tags': False}.
+
+Three quantities in the GUESS/WEIGHT steps depend on the quarter t, not on
+any particle: predict_x's anchor_t (the kappa-weighted sales history),
+mailbox_loglik's uptake_t (the mailback ramp fraction), and predict_phi_logit's
+u_t (the deposit-intervention indicator, 0 before params.phi_dynamics.t_deposit
+and 1 from then on -- None means it never switches on). pf_step's signature
+has no `t` argument, and predict_phi_logit is called from inside pf_step (not
+from run_filter directly), so all three have to ride along in obs_t. Before
+calling pf_step each quarter, run_filter must inject:
+  - obs_t['_anchor']:          simulator.make_x_anchor_series(cfg)[t]
+  - obs_t['_mailbox_uptake']:  simulator.mailbox_uptake(t, cfg)
+  - obs_t['_u']:               1.0 if (params.phi_dynamics.t_deposit is not
+                                None and t >= params.phi_dynamics.t_deposit)
+                                else 0.0
+Treat these as part of obs_t even though they aren't observations -- it's the
+one channel-agnostic dict pf_step already receives every quarter, so it's
+where quarter-dependent constants ride along without changing pf_step's
+signature. params.phi_dynamics.t_deposit is the SAME field
+simulator.simulate_truth reads, so ground truth and the filter's beliefs about
+the intervention always agree -- as long as the caller sets it (and
+params.tag.tau, see below) to match whatever generated `observations`, before
+calling run_filter.
+
+One quantity is a scenario-level constant with no quarter-dependence at all,
+so it doesn't need routing through obs_t: tag_loglik reads params.tag.tau
+directly (no need to pass it separately).
 """
 
 from __future__ import annotations

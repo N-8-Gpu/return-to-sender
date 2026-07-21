@@ -67,15 +67,18 @@ def mailbox_uptake(t: int, cfg: Config) -> float:
 # Ground truth: one concrete scenario, scalar per-quarter draws
 # ---------------------------------------------------------------------------
 
-def simulate_truth(cfg: Config, rng: np.random.Generator, t_deposit: int | None) -> dict[str, np.ndarray]:
+def simulate_truth(cfg: Config, rng: np.random.Generator) -> dict[str, np.ndarray]:
     """Simulate the five hidden states over cfg.geography.n_quarters quarters.
 
-    t_deposit: quarter the deposit intervention switches on (u_t becomes 1 from
-    then on), or None if it never does.
+    Reads the deposit intervention timing from cfg.phi_dynamics.t_deposit (an
+    int quarter, or None if it never switches on) -- this is the same field
+    the filter reads, so ground truth and the filter's beliefs about the
+    intervention always agree by construction.
 
     Returns arrays keyed by: X, X_emb, X_rem, phi_emb, phi_rem, phi_bar, r, s, L, u.
     """
     T = cfg.geography.n_quarters
+    t_deposit = cfg.phi_dynamics.t_deposit
     anchors = make_x_anchor_series(cfg)
     w_emb, w_rem = cfg.geography.class_share
 
@@ -152,11 +155,15 @@ def simulate_truth(cfg: Config, rng: np.random.Generator, t_deposit: int | None)
     }
 
 
-def simulate_observations(cfg: Config, rng: np.random.Generator, truth: dict[str, np.ndarray], tau: float) -> dict[str, np.ndarray]:
+def simulate_observations(cfg: Config, rng: np.random.Generator, truth: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     """Draw every observation channel from the ground truth. Each channel is a
     function of truth + noise; NaN marks a channel that is off or not yet active.
+
+    Reads the tag-adoption share from cfg.tag.tau (0 means the tags channel is
+    off entirely) -- the same field the filter reads for tag_loglik's noise scale.
     """
     T = cfg.geography.n_quarters
+    tau = cfg.tag.tau
     X, X_emb, X_rem = truth["X"], truth["X_emb"], truth["X_rem"]
     phi_emb, phi_rem, phi_bar = truth["phi_emb"], truth["phi_rem"], truth["phi_bar"]
     s, L = truth["s"], truth["L"]
@@ -218,12 +225,18 @@ def simulate_observations(cfg: Config, rng: np.random.Generator, truth: dict[str
     }
 
 
-def simulate(cfg: Config, rng: np.random.Generator, t_deposit: int | None, tau: float) -> dict[str, dict[str, np.ndarray]]:
+def simulate(cfg: Config, rng: np.random.Generator) -> dict[str, dict[str, np.ndarray]]:
     """Run the full synthetic scenario: hidden states, then every observation channel.
+
+    Deposit timing and tag adoption come from cfg.phi_dynamics.t_deposit and
+    cfg.tag.tau -- set those on `cfg` before calling this, rather than passing
+    them here, so the same Config instance is later the filter's single source
+    of truth for replicating the same intervention/tag assumptions.
+
     Returns {'truth': {...}, 'obs': {...}}.
     """
-    truth = simulate_truth(cfg, rng, t_deposit)
-    obs = simulate_observations(cfg, rng, truth, tau)
+    truth = simulate_truth(cfg, rng)
+    obs = simulate_observations(cfg, rng, truth)
     return {"truth": truth, "obs": obs}
 
 
@@ -326,8 +339,14 @@ def compactor_loglik(h: float, phi_bar: np.ndarray, x: np.ndarray, cfg: Config) 
     return stats.poisson.logpmf(h, np.maximum(rate, 1e-12))
 
 
-def tag_loglik(z: float, phi_bar: np.ndarray, tau: float, cfg: Config) -> np.ndarray:
-    """Gaussian log-likelihood of the stylized tag/passport reading; zero contribution if tau <= 0."""
+def tag_loglik(z: float, phi_bar: np.ndarray, cfg: Config) -> np.ndarray:
+    """Gaussian log-likelihood of the stylized tag/passport reading.
+
+    Reads tau from cfg.tag.tau (zero contribution if tau <= 0) -- the same
+    field simulate_observations reads to generate the tag observation, so
+    caller and generator can never disagree on which tau produced the data.
+    """
+    tau = cfg.tag.tau
     if np.isnan(z) or tau <= 0:
         return np.zeros_like(phi_bar)
     sigma = cfg.tag.sigma_tag_scale * (1 - tau) + cfg.tag.sigma_tag_floor

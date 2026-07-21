@@ -84,7 +84,10 @@ class PhiDynamicsConfig:
     # Calibrated so ~12 quarters of an active deposit pulls phi_bar down toward the
     # Nova Scotia ~80%-capture ceiling observed in practice [S13], not an instant jump.
     q_phi: float = 0.02  # process noise sd, logit scale; ASSUMPTION (kept small: leakage drifts slowly)
-    t_deposit: int = 20  # default quarter the deposit intervention switches on; app can override
+    t_deposit: int | None = 20  # quarter the deposit intervention switches on; None = never active
+    # Single source of truth: simulator.py reads this field (not a separate function
+    # argument) so the filter can replicate the exact same intervention timing from
+    # this same Config instance. Set it (and tag.tau below) before calling simulate().
 
 
 @dataclass
