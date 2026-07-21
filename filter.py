@@ -99,11 +99,23 @@ def run_filter(
     params.fire_intensity.l0, the lifespan anchor, etc.) plus process noise
     for one step, then calls pf_step once per quarter.
 
-    Returns a dict holding, at minimum:
-      - per-quarter weighted quantiles (e.g. 5th/50th/95th percentile) for
-        each of X, phi_emb, phi_rem, phi_bar, r, s, L
-      - the N_eff trace, one value per quarter
-      - the final particle cloud and weights (invoice.py needs these to
-        compute the cost posterior)
+    Returns a dict with exactly these keys (invoice.py and app.py both depend
+    on this shape):
+      - 'quantiles': dict mapping state name -> array of shape (T, 3), the
+        weighted (5th, 50th, 95th) percentile at each quarter. Include at
+        least 'X', 'phi_emb', 'phi_rem', 'phi_bar', 's', 'L' (the shrinking-
+        bands chart plots phi_bar; the others are there for diagnostics).
+      - 'n_eff': array of shape (T,), the N_eff computed each quarter (after
+        normalizing, before any resampling that quarter).
+      - 'particles_history': dict mapping state name -> array of shape
+        (T, n_particles), the particle values actually used to compute that
+        quarter's weights (i.e. record BEFORE resampling resets them to
+        uniform weight, since invoice.py needs the corresponding
+        'weights_history' entry to still carry information). Must include
+        at least 'X', 'phi_bar', 'L', 's' -- invoice.py computes per-particle
+        cost from exactly these four each quarter.
+      - 'weights_history': array of shape (T, n_particles), the normalized
+        weights paired with 'particles_history' at each quarter (so
+        weights_history[t] sums to 1 and matches particles_history[state][t]).
     """
     raise NotImplementedError("Nolan's part: implement the per-quarter filter loop.")
