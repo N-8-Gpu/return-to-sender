@@ -20,10 +20,21 @@ shock at that quarter -- the filter has to infer the regime shift from evidence
 
 from __future__ import annotations
 
+import io
+
 import numpy as np
 from scipy import stats
 
 from config import Config, lifespan_kernel, logit, sigmoid
+
+# Channel names the filter conditions on, in canonical order. Uploaded CSVs and
+# the synthetic simulator both produce observation dicts keyed by these.
+OBS_CHANNELS: tuple[str, ...] = (
+    "audits_emb", "audits_rem", "depots", "fires", "prices", "mailbox", "compactor", "tags",
+)
+
+# Channels that are event/sample counts and therefore must be non-negative.
+_COUNT_CHANNELS: tuple[str, ...] = ("audits_emb", "audits_rem", "fires", "mailbox", "compactor")
 
 # ---------------------------------------------------------------------------
 # Sales history and the lifespan-kernel anchor
@@ -337,6 +348,72 @@ def compactor_loglik(h: float, phi_bar: np.ndarray, x: np.ndarray, cfg: Config) 
         return np.zeros_like(phi_bar)
     rate = cfg.compactor.alpha_comp * phi_bar * x
     return stats.poisson.logpmf(h, np.maximum(rate, 1e-12))
+
+
+# ---------------------------------------------------------------------------
+# Real-data ingestion: uploaded quarterly CSVs, same obs-dict format as
+# simulate_observations so the filter cannot tell the two apart.
+# ---------------------------------------------------------------------------
+
+def observations_csv_template(cfg: Config, rng: np.random.Generator | None = None) -> str:
+    """A CSV template for real-data uploads: header row of recognized channel
+    columns plus a `quarter` index, filled with one demo scenario so the
+    expected magnitudes are visible. Blank/missing cells mean 'no reading'.
+    """
+    rng = rng if rng is not None else np.random.default_rng(cfg.seed)
+    obs = simulate_observations(cfg, rng, simulate_truth(cfg, rng))
+    T = cfg.geography.n_quarters
+    lines = ["quarter," + ",".join(OBS_CHANNELS)]
+    for t in range(T):
+        cells = [str(t + 1)]
+        for ch in OBS_CHANNELS:
+            v = obs[ch][t]
+            cells.append("" if np.isnan(v) else f"{v:.4g}")
+        lines.append(",".join(cells))
+    return "\n".join(lines) + "\n"
+
+
+def parse_observations_csv(csv_text: str) -> tuple[dict[str, np.ndarray], int]:
+    """Parse an uploaded quarterly-observations CSV into the standard obs dict.
+
+    Expects a header row. Recognized columns: any of OBS_CHANNELS (missing
+    columns and blank cells become NaN, meaning 'no reading that quarter');
+    a `quarter` column is allowed and ignored; unknown columns are ignored.
+    Returns (obs_dict, n_quarters). Raises ValueError with a plain-language
+    message on anything malformed, so the app can show it to the user.
+    """
+    try:
+        data = np.genfromtxt(io.StringIO(csv_text), delimiter=",", names=True, dtype=float)
+    except Exception as exc:
+        raise ValueError(f"Could not read the CSV: {exc}") from exc
+    if data.dtype.names is None:
+        raise ValueError("The CSV needs a header row naming its columns.")
+
+    data = np.atleast_1d(data)
+    T = len(data)
+    if T < 4:
+        raise ValueError(f"Need at least 4 quarters of data; the file has {T} row(s).")
+
+    recognized = [ch for ch in OBS_CHANNELS if ch in data.dtype.names]
+    if not recognized:
+        raise ValueError(
+            "No recognized channel columns found. Expected some of: " + ", ".join(OBS_CHANNELS) + "."
+        )
+
+    obs = {
+        ch: np.asarray(data[ch], dtype=float) if ch in data.dtype.names else np.full(T, np.nan)
+        for ch in OBS_CHANNELS
+    }
+
+    for ch in _COUNT_CHANNELS:
+        values = obs[ch]
+        if np.any(values[~np.isnan(values)] < 0):
+            raise ValueError(f"Column '{ch}' is a count and cannot contain negative values.")
+    depots = obs["depots"]
+    if np.any(depots[~np.isnan(depots)] <= 0):
+        raise ValueError("Column 'depots' is a tonnage and must be positive where present.")
+
+    return obs, T
 
 
 def tag_loglik(z: float, phi_bar: np.ndarray, cfg: Config) -> np.ndarray:
