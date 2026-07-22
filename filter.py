@@ -1,7 +1,6 @@
-"""filter.py -- the particle filter core. HUMAN-WRITTEN (Nolan's part).
+"""filter.py -- the particle filter core.
 
-This file intentionally contains only signatures, docstrings, and
-NotImplementedError stubs. Fill in the four verbs below:
+Fills in the four verbs:
 
     for each quarter t:
         GUESS:  push every particle through the dynamics (sample noise, flip regime coin)
@@ -12,25 +11,11 @@ NotImplementedError stubs. Fill in the four verbs below:
 
 Same predict-correct heartbeat as a Kalman filter -- sampling replaces algebra.
 
-Dynamics: call simulator.py's predict_x, predict_phi_logit, predict_regime,
-predict_price_spread, predict_fire_intensity for the GUESS step (they're
-already vectorized over a particle array, one call per quarter).
-
-Weighting: call simulator.py's audit_loglik, depot_loglik, fire_loglik,
-price_loglik, mailbox_loglik, compactor_loglik, tag_loglik for the WEIGHT
-step. Each returns a per-particle log-likelihood array; sum the logs across
-active channels, then exponentiate (subtract the max first for stability)
-and multiply into the weights. Every one of these already returns zeros for
-a NaN observation, so it's safe to call them even for channels that are
-toggled off or not yet active -- but check `active_channels` too, since a
-channel the user has switched off should not be conditioned on even when
-data exists.
-
 particles: a dict of arrays, one per hidden state, each shape (n_particles,).
-Keys: 'log_x', 'logit_phi_emb', 'logit_phi_rem', 'r', 's', 'L'.
-(phi_emb/phi_rem/phi_bar/X are derived from these via config.sigmoid /
-np.exp -- keep the particle cloud in the same internal representation the
-dynamics use, convert to natural units only when recording results.)
+Keys: 'log_x', 'logit_phi_emb', 'logit_phi_rem', 'r', 's', 'L'. phi_emb/
+phi_rem/phi_bar/X are derived from these via config.sigmoid / np.exp -- the
+particle cloud stays in the same internal representation the dynamics use,
+converted to natural units only when recording results.
 
 active_channels: dict mapping channel name -> bool, e.g.
 {'audits': True, 'depots': True, 'fires': False, 'prices': True,
@@ -41,33 +26,39 @@ any particle: predict_x's anchor_t (the kappa-weighted sales history),
 mailbox_loglik's uptake_t (the mailback ramp fraction), and predict_phi_logit's
 u_t (the deposit-intervention indicator, 0 before params.phi_dynamics.t_deposit
 and 1 from then on -- None means it never switches on). pf_step's signature
-has no `t` argument, and predict_phi_logit is called from inside pf_step (not
-from run_filter directly), so all three have to ride along in obs_t. Before
-calling pf_step each quarter, run_filter must inject:
-  - obs_t['_anchor']:          simulator.make_x_anchor_series(cfg)[t]
-  - obs_t['_mailbox_uptake']:  simulator.mailbox_uptake(t, cfg)
-  - obs_t['_u']:               1.0 if (params.phi_dynamics.t_deposit is not
-                                None and t >= params.phi_dynamics.t_deposit)
-                                else 0.0
-Treat these as part of obs_t even though they aren't observations -- it's the
-one channel-agnostic dict pf_step already receives every quarter, so it's
-where quarter-dependent constants ride along without changing pf_step's
-signature. params.phi_dynamics.t_deposit is the SAME field
-simulator.simulate_truth reads, so ground truth and the filter's beliefs about
-the intervention always agree -- as long as the caller sets it (and
-params.tag.tau, see below) to match whatever generated `observations`, before
-calling run_filter.
-
-One quantity is a scenario-level constant with no quarter-dependence at all,
-so it doesn't need routing through obs_t: tag_loglik reads params.tag.tau
-directly (no need to pass it separately).
+has no `t` argument, and predict_phi_logit is called from inside pf_step, so
+all three ride along in obs_t under the keys '_anchor', '_mailbox_uptake',
+and '_u', injected by run_filter before each pf_step call. tag_loglik reads
+params.tag.tau directly instead (a scenario-level constant, not quarter-
+varying, so it doesn't need routing through obs_t).
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-from config import Config
+from config import Config, logit, sigmoid
+from simulator import (
+    audit_loglik,
+    compactor_loglik,
+    depot_loglik,
+    fire_loglik,
+    mailbox_loglik,
+    mailbox_uptake,
+    make_x_anchor_series,
+    predict_fire_intensity,
+    predict_phi_logit,
+    predict_price_spread,
+    predict_regime,
+    predict_x,
+    price_loglik,
+    tag_loglik,
+)
+
+_PARTICLE_KEYS = ("log_x", "logit_phi_emb", "logit_phi_rem", "r", "s", "L")
+_QUANTILE_STATES = ("X", "phi_emb", "phi_rem", "phi_bar", "s", "L")
+_HISTORY_STATES = ("X", "phi_bar", "L", "s")
+_QUANTILE_LEVELS = (0.05, 0.5, 0.95)
 
 
 def systematic_resample(weights: np.ndarray, rng: np.random.Generator) -> np.ndarray:
@@ -79,7 +70,22 @@ def systematic_resample(weights: np.ndarray, rng: np.random.Generator) -> np.nda
     Returns an integer array of shape (len(weights),): the index into the
     original particle arrays that each new particle should copy.
     """
-    raise NotImplementedError("Nolan's part: implement systematic resampling.")
+    n = len(weights)
+    positions = (rng.random() + np.arange(n)) / n
+    cumulative = np.cumsum(weights)
+    cumulative[-1] = 1.0  # guard against floating-point drift below 1
+    return np.searchsorted(cumulative, positions)
+
+
+def _weighted_quantiles(values: np.ndarray, weights: np.ndarray) -> np.ndarray:
+    """The (5th, 50th, 95th) weighted percentile of a 1-D particle array."""
+    n = len(values)
+    order = np.argsort(values)
+    cumulative = np.cumsum(weights[order])
+    cumulative /= cumulative[-1]
+    idx = np.searchsorted(cumulative, _QUANTILE_LEVELS)
+    idx = np.minimum(idx, n - 1)
+    return values[order][idx]
 
 
 def pf_step(
@@ -94,17 +100,71 @@ def pf_step(
 
     particles: current particle cloud (see module docstring for keys/shapes).
     weights: current normalized weights, shape (n_particles,), summing to 1.
-    obs_t: this quarter's observations, one scalar per channel (may be NaN).
+    obs_t: this quarter's observations, one scalar per channel (may be NaN),
+    plus the quarter-dependent constants '_anchor', '_mailbox_uptake', '_u'.
     active_channels: which channels the filter should condition on this run.
     params: the shared Config instance (dynamics + observation-noise settings).
     rng: shared numpy Generator, already seeded by the caller.
 
     Returns (new_particles, new_weights, n_eff) where n_eff = 1 / sum(weights**2)
-    is computed AFTER normalizing but BEFORE any resampling (it's the
-    diagnostic that decides whether to resample, and the value the caller
-    records for the N_eff sparkline).
+    is computed AFTER normalizing but BEFORE any resampling.
     """
-    raise NotImplementedError("Nolan's part: implement predict/weight/normalize/resample.")
+    n = len(weights)
+    anchor_t = obs_t["_anchor"]
+    uptake_t = obs_t["_mailbox_uptake"]
+    u_t = obs_t["_u"]
+
+    # GUESS
+    log_x = predict_x(particles["log_x"], anchor_t, params, rng)
+    logit_phi_emb = predict_phi_logit(particles["logit_phi_emb"], u_t, params, rng)
+    logit_phi_rem = predict_phi_logit(particles["logit_phi_rem"], u_t, params, rng)
+    r = predict_regime(particles["r"], params, rng)
+    s = predict_price_spread(particles["s"], r, params, rng)
+    L = predict_fire_intensity(particles["L"], params, rng)
+
+    phi_emb = sigmoid(logit_phi_emb)
+    phi_rem = sigmoid(logit_phi_rem)
+    w_emb, w_rem = params.geography.class_share
+    phi_bar = w_emb * phi_emb + w_rem * phi_rem
+    X = np.exp(log_x)
+    X_emb, X_rem = w_emb * X, w_rem * X
+
+    # WEIGHT: sum log-likelihoods over active channels, then exponentiate
+    log_w = np.log(weights)
+    if active_channels.get("audits"):
+        log_w = log_w + audit_loglik(obs_t["audits_emb"], phi_emb, params)
+        log_w = log_w + audit_loglik(obs_t["audits_rem"], phi_rem, params)
+    if active_channels.get("depots"):
+        log_w = log_w + depot_loglik(obs_t["depots"], phi_bar, X, params)
+    if active_channels.get("fires"):
+        log_w = log_w + fire_loglik(obs_t["fires"], phi_emb, phi_rem, X_emb, X_rem, L, params)
+    if active_channels.get("prices"):
+        log_w = log_w + price_loglik(obs_t["prices"], s, params)
+    if active_channels.get("mailbox"):
+        log_w = log_w + mailbox_loglik(obs_t["mailbox"], phi_bar, X, uptake_t, params)
+    if active_channels.get("compactor"):
+        log_w = log_w + compactor_loglik(obs_t["compactor"], phi_bar, X, params)
+    if active_channels.get("tags"):
+        log_w = log_w + tag_loglik(obs_t["tags"], phi_bar, params)
+
+    # NORM
+    log_w -= log_w.max()  # stability: keeps exp() from overflowing/underflowing
+    new_weights = np.exp(log_w)
+    new_weights /= new_weights.sum()
+    n_eff = 1.0 / np.sum(new_weights ** 2)
+
+    new_particles = {
+        "log_x": log_x, "logit_phi_emb": logit_phi_emb, "logit_phi_rem": logit_phi_rem,
+        "r": r, "s": s, "L": L,
+    }
+
+    # CULL
+    if n_eff < n / 2:
+        idx = systematic_resample(new_weights, rng)
+        new_particles = {key: value[idx] for key, value in new_particles.items()}
+        new_weights = np.full(n, 1.0 / n)
+
+    return new_particles, new_weights, n_eff
 
 
 def run_filter(
@@ -118,30 +178,81 @@ def run_filter(
 
     observations: dict keyed by channel name -> array of shape (T,), as
     returned by simulator.simulate(...)['obs']. Includes channels that are
-    off in active_channels (pf_step is responsible for ignoring those).
+    off in active_channels; pf_step ignores those via the active_channels check.
 
-    Initializes the particle cloud by sampling n_particles draws from the
-    same priors simulate_truth uses for quarter -1 (params.phi_dynamics.phi0,
-    params.fire_intensity.l0, the lifespan anchor, etc.) plus process noise
-    for one step, then calls pf_step once per quarter.
+    Initializes the particle cloud by sampling n_particles draws from the same
+    priors simulate_truth uses for quarter -1 (params.phi_dynamics.phi0,
+    params.fire_intensity.l0, the lifespan anchor, etc.) plus one step of
+    process noise, then calls pf_step once per quarter.
 
-    Returns a dict with exactly these keys (invoice.py and app.py both depend
-    on this shape):
+    Reads params.phi_dynamics.t_deposit and params.tag.tau to replicate the
+    same deposit-intervention timing and tag-adoption share used to generate
+    `observations` -- set both on `params` to match before calling this.
+
+    Returns a dict with:
       - 'quantiles': dict mapping state name -> array of shape (T, 3), the
-        weighted (5th, 50th, 95th) percentile at each quarter. Include at
-        least 'X', 'phi_emb', 'phi_rem', 'phi_bar', 's', 'L' (the shrinking-
-        bands chart plots phi_bar; the others are there for diagnostics).
-      - 'n_eff': array of shape (T,), the N_eff computed each quarter (after
-        normalizing, before any resampling that quarter).
+        weighted (5th, 50th, 95th) percentile at each quarter, for 'X',
+        'phi_emb', 'phi_rem', 'phi_bar', 's', 'L'.
+      - 'n_eff': array of shape (T,), the N_eff computed each quarter.
       - 'particles_history': dict mapping state name -> array of shape
-        (T, n_particles), the particle values actually used to compute that
-        quarter's weights (i.e. record BEFORE resampling resets them to
-        uniform weight, since invoice.py needs the corresponding
-        'weights_history' entry to still carry information). Must include
-        at least 'X', 'phi_bar', 'L', 's' -- invoice.py computes per-particle
-        cost from exactly these four each quarter.
+        (T, n_particles), for 'X', 'phi_bar', 'L', 's' -- the particle values
+        used to compute that quarter's weights, before any resampling.
       - 'weights_history': array of shape (T, n_particles), the normalized
-        weights paired with 'particles_history' at each quarter (so
-        weights_history[t] sums to 1 and matches particles_history[state][t]).
+        weights paired with 'particles_history' at each quarter.
     """
-    raise NotImplementedError("Nolan's part: implement the per-quarter filter loop.")
+    rng = np.random.default_rng(seed)
+    T = params.geography.n_quarters
+    n = n_particles
+
+    anchors = make_x_anchor_series(params)
+    w_emb, w_rem = params.geography.class_share
+    t_deposit = params.phi_dynamics.t_deposit
+
+    logit_phi_emb0, logit_phi_rem0 = logit(np.array(params.phi_dynamics.phi0))
+    particles = {
+        "log_x": np.full(n, anchors[0]) + rng.normal(0.0, np.sqrt(params.x_dynamics.q_x), n),
+        "logit_phi_emb": np.full(n, logit_phi_emb0) + rng.normal(0.0, np.sqrt(params.phi_dynamics.q_phi), n),
+        "logit_phi_rem": np.full(n, logit_phi_rem0) + rng.normal(0.0, np.sqrt(params.phi_dynamics.q_phi), n),
+        "r": np.zeros(n, dtype=int),
+        "s": np.full(n, params.price_spread.mu[0]),
+        "L": np.full(n, params.fire_intensity.l0) + rng.normal(0.0, np.sqrt(params.fire_intensity.q_l), n),
+    }
+    weights = np.full(n, 1.0 / n)
+
+    quantiles = {name: np.empty((T, 3)) for name in _QUANTILE_STATES}
+    n_eff_trace = np.empty(T)
+    particles_history = {name: np.empty((T, n)) for name in _HISTORY_STATES}
+    weights_history = np.empty((T, n))
+
+    obs_channels = ("audits_emb", "audits_rem", "depots", "fires", "prices", "mailbox", "compactor", "tags")
+
+    for t in range(T):
+        obs_t = {ch: observations[ch][t] if ch in observations else np.nan for ch in obs_channels}
+        obs_t["_anchor"] = anchors[t]
+        obs_t["_mailbox_uptake"] = mailbox_uptake(t, params)
+        obs_t["_u"] = 1.0 if (t_deposit is not None and t >= t_deposit) else 0.0
+
+        particles, weights, n_eff = pf_step(particles, weights, obs_t, active_channels, params, rng)
+        n_eff_trace[t] = n_eff
+
+        phi_emb = sigmoid(particles["logit_phi_emb"])
+        phi_rem = sigmoid(particles["logit_phi_rem"])
+        phi_bar = w_emb * phi_emb + w_rem * phi_rem
+        X = np.exp(particles["log_x"])
+
+        state_values = {
+            "X": X, "phi_emb": phi_emb, "phi_rem": phi_rem, "phi_bar": phi_bar,
+            "s": particles["s"], "L": particles["L"],
+        }
+        for name in _QUANTILE_STATES:
+            quantiles[name][t] = _weighted_quantiles(state_values[name], weights)
+        for name in _HISTORY_STATES:
+            particles_history[name][t] = state_values[name]
+        weights_history[t] = weights
+
+    return {
+        "quantiles": quantiles,
+        "n_eff": n_eff_trace,
+        "particles_history": particles_history,
+        "weights_history": weights_history,
+    }
