@@ -105,9 +105,11 @@ def run_upload_engagement(csv_text: str, seed: int, t_deposit: int | None, tau: 
     """Parse client data and run the filter on it. No ground truth exists here,
     so truth overlays and the counterfactual are unavailable."""
     active = dict(channels)
-    obs, T = parse_observations_csv(csv_text)
+    obs, T, sales = parse_observations_csv(csv_text)
     t_dep = None if t_deposit is None else min(t_deposit, T - 1)
     cfg = _make_config(seed, t_dep, tau, n_quarters=T)
+    if sales is not None:
+        cfg.geography.sales_override = tuple(float(x) for x in sales)
     results = run_filter(obs, active, cfg, n_particles=N_PARTICLES, seed=seed)
     posterior = inv.compute_cost_posterior(results, cfg)
     return {
@@ -198,7 +200,9 @@ def main() -> None:
                 observations_csv_template(template_cfg),
                 file_name="observations_template.csv",
                 mime="text/csv",
-                help="Quarterly rows; recognized channel columns; blank cells = no reading.",
+                help="Quarterly rows; recognized channel columns; blank cells = no reading. "
+                     "The sales column is the disclosed sales series (required in every row "
+                     "if present); without it, dollar figures use the synthetic sales config.",
             )
             uploaded = st.file_uploader("Quarterly observations CSV", type=["csv"], key="uploader")
             if uploaded is not None:
@@ -454,11 +458,18 @@ def main() -> None:
 
     # --------------------------- Methodology & sources -------------------------
     with tab_method:
-        data_note = (
-            "demo scenario" if is_demo else
-            "client upload; sales series still comes from config. Replace it with disclosed sales "
-            "in a real engagement"
-        )
+        if is_demo:
+            data_note = "demo scenario"
+        elif cfg.geography.sales_override is not None:
+            data_note = (
+                "client upload with a disclosed sales column; pre-sample sales history is held "
+                "flat at the earliest observed level (assumption)"
+            )
+        else:
+            data_note = (
+                "client upload without a sales column, so the tonnage anchor still uses the "
+                "configured synthetic sales series. Add a `sales` column for real dollar figures"
+            )
         st.markdown(
             f"""
     ### Estimator

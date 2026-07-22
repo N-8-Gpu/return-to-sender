@@ -25,7 +25,7 @@ import io
 import numpy as np
 from scipy import stats
 
-from config import Config, lifespan_kernel, logit, sigmoid
+from config import Config, lifespan_kernel, logit, sales_series, sigmoid
 
 # Channel names the filter conditions on, in canonical order. Uploaded CSVs and
 # the synthetic simulator both produce observation dicts keyed by these.
@@ -41,10 +41,18 @@ _COUNT_CHANNELS: tuple[str, ...] = ("audits_emb", "audits_rem", "fires", "mailbo
 # ---------------------------------------------------------------------------
 
 def _extended_sales(cfg: Config, n_lags: int) -> np.ndarray:
-    """Sales series extended n_lags quarters into the past (same growth trend),
-    so the lifespan kernel has history to look back on even at quarter 0.
+    """Sales series extended n_lags quarters into the past, so the lifespan
+    kernel has history to look back on even at quarter 0.
     Index t_ext = n_lags + t maps to calendar quarter t (t can be negative).
+
+    With a client-supplied sales_override there is no disclosed pre-history, so
+    the earliest observed level is held flat backward (ASSUMPTION, documented in
+    the app's methodology tab); the parametric default back-extrapolates its own
+    growth trend instead.
     """
+    if cfg.geography.sales_override is not None:
+        observed = sales_series(cfg.geography)
+        return np.concatenate([np.full(n_lags, observed[0]), observed])
     t = np.arange(-n_lags, cfg.geography.n_quarters)
     return cfg.geography.sales_t0 * (1.0 + cfg.geography.sales_growth) ** t
 
@@ -356,16 +364,18 @@ def compactor_loglik(h: float, phi_bar: np.ndarray, x: np.ndarray, cfg: Config) 
 # ---------------------------------------------------------------------------
 
 def observations_csv_template(cfg: Config, rng: np.random.Generator | None = None) -> str:
-    """A CSV template for real-data uploads: header row of recognized channel
-    columns plus a `quarter` index, filled with one demo scenario so the
-    expected magnitudes are visible. Blank/missing cells mean 'no reading'.
+    """A CSV template for real-data uploads: header row of a `quarter` index, the
+    disclosed `sales` series, and the recognized channel columns, filled with one
+    demo scenario so the expected magnitudes are visible. Blank/missing cells
+    mean 'no reading'; `sales` is a required disclosed input, never blank.
     """
     rng = rng if rng is not None else np.random.default_rng(cfg.seed)
     obs = simulate_observations(cfg, rng, simulate_truth(cfg, rng))
+    sales = sales_series(cfg.geography)
     T = cfg.geography.n_quarters
-    lines = ["quarter," + ",".join(OBS_CHANNELS)]
+    lines = ["quarter,sales," + ",".join(OBS_CHANNELS)]
     for t in range(T):
-        cells = [str(t + 1)]
+        cells = [str(t + 1), f"{sales[t]:.4g}"]
         for ch in OBS_CHANNELS:
             v = obs[ch][t]
             cells.append("" if np.isnan(v) else f"{v:.4g}")
@@ -373,14 +383,17 @@ def observations_csv_template(cfg: Config, rng: np.random.Generator | None = Non
     return "\n".join(lines) + "\n"
 
 
-def parse_observations_csv(csv_text: str) -> tuple[dict[str, np.ndarray], int]:
+def parse_observations_csv(csv_text: str) -> tuple[dict[str, np.ndarray], int, np.ndarray | None]:
     """Parse an uploaded quarterly-observations CSV into the standard obs dict.
 
     Expects a header row. Recognized columns: any of OBS_CHANNELS (missing
     columns and blank cells become NaN, meaning 'no reading that quarter');
+    an optional `sales` column carrying the disclosed sales series (a known
+    model input, so if present it must be filled in every row and positive);
     a `quarter` column is allowed and ignored; unknown columns are ignored.
-    Returns (obs_dict, n_quarters). Raises ValueError with a plain-language
-    message on anything malformed, so the app can show it to the user.
+    Returns (obs_dict, n_quarters, sales_or_None). Raises ValueError with a
+    plain-language message on anything malformed, so the app can show it to
+    the user.
     """
     try:
         data = np.genfromtxt(io.StringIO(csv_text), delimiter=",", names=True, dtype=float)
@@ -413,7 +426,18 @@ def parse_observations_csv(csv_text: str) -> tuple[dict[str, np.ndarray], int]:
     if np.any(depots[~np.isnan(depots)] <= 0):
         raise ValueError("Column 'depots' is a tonnage and must be positive where present.")
 
-    return obs, T
+    sales = None
+    if "sales" in data.dtype.names:
+        sales = np.asarray(data["sales"], dtype=float)
+        if np.any(np.isnan(sales)):
+            raise ValueError(
+                "Column 'sales' is a disclosed input, not an observation: fill it in every row "
+                "(or remove the column to fall back to the configured sales series)."
+            )
+        if np.any(sales <= 0):
+            raise ValueError("Column 'sales' must be positive in every row.")
+
+    return obs, T, sales
 
 
 def tag_loglik(z: float, phi_bar: np.ndarray, cfg: Config) -> np.ndarray:

@@ -37,10 +37,21 @@ class GeographyConfig:
     n_quarters: int = 40  # T = ten years of quarters (brief)
     sales_t0: float = 200.0  # tonnes of battery-containing product sold, quarter 0; ASSUMPTION scale
     sales_growth: float = 0.015  # gentle per-quarter growth; ASSUMPTION
+    sales_override: tuple[float, ...] | None = None
+    # Real disclosed sales, one value per quarter (e.g. from a client CSV's `sales`
+    # column). When set, it replaces the parametric series above everywhere; its
+    # length must equal n_quarters. Tuple, not array, so Config stays hashable/picklable.
 
 
 def sales_series(geo: GeographyConfig) -> np.ndarray:
-    """Disclosed sales S_t: a gently growing, deterministic series (a 'known' input)."""
+    """Disclosed sales S_t: the client-supplied series when provided, otherwise the
+    gently growing parametric default (a 'known' input either way)."""
+    if geo.sales_override is not None:
+        if len(geo.sales_override) != geo.n_quarters:
+            raise ValueError(
+                f"sales_override has {len(geo.sales_override)} quarters but n_quarters={geo.n_quarters}"
+            )
+        return np.asarray(geo.sales_override, dtype=float)
     t = np.arange(geo.n_quarters)
     return geo.sales_t0 * (1.0 + geo.sales_growth) ** t
 
