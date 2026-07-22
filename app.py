@@ -253,7 +253,7 @@ def main() -> None:
     st.title("Hidden battery leakage: measured, priced, billed")
     st.caption(
         "Return to Sender Advisory | Prepared for the Provincial Environment & Stewardship "
-        "Authority (illustrative client) | Synthetic demonstration -- not financial or legal advice"
+        "Authority (illustrative client) | Synthetic demonstration; not financial or legal advice"
     )
 
     if "engagement" not in st.session_state:
@@ -263,22 +263,22 @@ def main() -> None:
     consume landfill capacity, and destroy recoverable material value. Operators and municipalities
     carry those costs today; producers do not [S6]. This tool estimates the *hidden* leakage rate
     from whatever evidence programs the client runs, prices the externality with quantified
-    uncertainty, and produces an invoice whose **billable floor** -- the 5th percentile of cumulative
-    cost -- is designed to survive challenge.
+    uncertainty, and produces an invoice whose **billable floor** (the 5th percentile of cumulative
+    cost) is designed to survive challenge.
 
     **To begin:** choose evidence programs in the sidebar and click **Run analysis**. Demo mode uses
     a fully synthetic ten-year scenario; upload mode accepts your own quarterly observations CSV.
 
     **The demonstration argument.** Turn programs on one at a time and watch the uncertainty band
     around the leakage estimate shrink. Every program the client commissions doesn't just collect
-    batteries -- it raises the amount that can be defensibly billed.
+    batteries; it raises the amount that can be defensibly billed.
             """
         )
         st.stop()
 
     eng = st.session_state["engagement"]
     if st.session_state.get("engagement_settings") != settings_key:
-        st.warning("Sidebar settings have changed since this analysis ran -- click **Run analysis** to refresh.")
+        st.warning("Sidebar settings have changed since this analysis ran. Click **Run analysis** to refresh.")
 
     cfg, post = eng["cfg"], eng["posterior"]
     T = cfg.geography.n_quarters
@@ -309,25 +309,25 @@ def main() -> None:
         st.markdown(
             f"""
     **Finding.** Over {T} quarters, an estimated **{post['total_leaked_tonnage']:,.0f} tonnes** of
-    lithium-ion batteries left the proper recovery stream. The resulting externality -- landfill
-    liability, expected fire losses, destroyed material value -- has a posterior median of
+    lithium-ion batteries left the proper recovery stream. The resulting externality (landfill
+    liability, expected fire losses, destroyed material value) has a posterior median of
     **{_fmt_money(post['total_median'])}**, of which **{_fmt_money(post['billable_floor'])}** is
     defensible under conservative assumptions (5th percentile).
 
     **Recommendation.** Adopt the billable floor as the producer assessment for this period,
-    modulated by design class (embedded vs. removable -- see the invoice's fee schedule). Each
+    modulated by design class (embedded vs. removable; see the invoice's fee schedule). Each
     additional evidence program narrows the credible interval (currently spanning
     {band_rel:.0%} of the median estimate) and raises the defensible floor; the marginal case for
     commissioning data is that **measurement is revenue**.
             """
         )
-        st.markdown("**Exhibit A -- cumulative externality and the billable floor**")
+        st.markdown("**Exhibit A: cumulative externality and the billable floor**")
         st.pyplot(cumulative_cost_chart(eng))
 
     # --------------------------- Evidence & estimator --------------------------
     with tab_evidence:
         st.markdown(
-            "**Exhibit B -- hidden leakage rate: posterior vs. evidence.** The shaded band is the "
+            "**Exhibit B: hidden leakage rate, posterior vs. evidence.** The shaded band is the "
             "90% credible interval; each active evidence program tightens it."
             + (" The dashed line is the synthetic ground truth the estimator cannot see."
                if is_demo else "")
@@ -339,18 +339,18 @@ def main() -> None:
             st.markdown(
                 """
     1. **Audits only.** Point at the wide band: with one evidence program, the province is
-       nearly guessing -- and so is any fee it tries to defend.
+       nearly guessing, and so is any fee it tries to defend.
     2. **Add the mail-back pilot, then compactor sensors.** The band visibly narrows around
        the same underlying truth. More evidence, same reality, sharper number.
     3. **Switch on the deposit program.** Leakage bends downward a few quarters later;
        the estimator catches the change without being told.
-    4. **Open the invoice tab.** The extra programs didn't change what leaked -- they raised
+    4. **Open the invoice tab.** The extra programs didn't change what leaked; they raised
        the amount that can be *defensibly billed*. Measurement is revenue.
                 """
             )
 
         if is_demo:
-            with st.expander("Exhibit C -- brand mass-balance reconciliation (roadmap)"):
+            with st.expander("Exhibit C: brand mass-balance reconciliation (roadmap)"):
                 st.markdown(
                     "Plant-level brand tallies among proper returns, from the simulator only "
                     "(not conditioned on by the estimator in v1). Roadmap: per-brand leakage "
@@ -414,12 +414,12 @@ def main() -> None:
     (PROs). Call2Recycle operates as the battery PRO in Ontario and Alberta and runs programs in
     six provinces [S11]. Nova Scotia's EPR framework took effect December 1, 2025, explicitly
     shifting program costs from municipalities to producers, and its 2026 producer-fee
-    consultation is underway [S14]. **The invoice's addressee -- "producers, via stewardship
-    organization" -- is an existing legal person with an existing fee mechanism.**
+    consultation is underway [S14]. **The invoice's addressee ("producers, via stewardship
+    organization") is an existing legal person with an existing fee mechanism.**
 
     **2. What's missing is the price, not the pipe.** Today's EPR fees recover *program costs*
     (collection, transport, processing). They do not price fires, landfill perpetual-care
-    liability, or destroyed material value -- the externalities in this invoice. Nobody measures
+    liability, or destroyed material value: the externalities in this invoice. Nobody measures
     them, so nobody bills them; the absence of a municipal per-fire cost figure [U1] is itself
     the finding. Meanwhile the burden lands on operators and municipalities: ~$2.5B in North
     American facility fire losses in 2025 [S4], one in four facility battery fires causing
@@ -428,25 +428,25 @@ def main() -> None:
 
     **3. Design-modulated fees have precedent; damage-based fees are the open question.**
     Fee modulation by product design (the embedded-vs-removable split on this invoice) is an
-    established EPR concept -- charging harder-to-recover designs more is an incentive, not a
+    established EPR concept: charging harder-to-recover designs more is an incentive, not a
     penalty. Whether a province's current statutes authorize fees calibrated to *measured
-    downstream damage* -- rather than program cost recovery -- is **unverified and flagged as an
+    downstream damage*, rather than program cost recovery, is **unverified and flagged as an
     open legal question [U3]**. Two candidate pathways, in order of ambition:
-    - *Fee-schedule modulation within existing PRO authority* -- reweight existing fees using the
+    - *Fee-schedule modulation within existing PRO authority:* reweight existing fees using the
       measured externality ratio between design classes.
-    - *Regulatory amendment adding externality cost recovery* -- following the template Nova
+    - *Regulatory amendment adding externality cost recovery:* following the template Nova
       Scotia set by shifting whole cost categories onto producers [S14].
 
     **4. Why the estimator is the legal strategy.** A fee challenged in consultation or court
     must be evidence-based and proportionate. That is precisely what the posterior provides:
-    the **billable floor is the 5th percentile** -- the amount defensible *even if* the estimate
+    the **billable floor is the 5th percentile**: the amount defensible *even if* the estimate
     is substantially wrong in producers' favor. Uncertainty is disclosed, not hidden; each new
     evidence program narrows the interval and raises the floor. The audit trail (which channels,
-    which likelihoods, which assumptions -- see Methodology) is the exhibit list.
+    which likelihoods, which assumptions; see Methodology) is the exhibit list.
 
     **5. Tailwinds.** Federal Landfill Methane Regulations already put landfill externalities on
     a regulatory footing [S8][S9]. The EU's battery-passport mandate (Feb 2027) makes unit-level
-    producer traceability law for larger batteries -- while explicitly excluding small consumer
+    producer traceability law for larger batteries, while explicitly excluding small consumer
     cells [S10]: exactly the gap this program addresses, and the reason the tags channel exists
     in the model.
             """
@@ -456,7 +456,7 @@ def main() -> None:
     with tab_method:
         data_note = (
             "demo scenario" if is_demo else
-            "client upload; sales series still comes from config -- replace with disclosed sales "
+            "client upload; sales series still comes from config. Replace it with disclosed sales "
             "in a real engagement"
         )
         st.markdown(
@@ -483,7 +483,7 @@ def main() -> None:
     unsourced constant is tagged ASSUMPTION in `config.py` and swept in the sensitivity panel.
             """
         )
-        st.markdown("**Exhibit D -- filter health (effective sample size).** "
+        st.markdown("**Exhibit D: filter health (effective sample size).** "
                     "N_eff near N means the particle cloud matches the evidence; collapses would "
                     "flag model misfit. Dips trigger systematic resampling.")
         st.pyplot(n_eff_chart(eng))

@@ -144,7 +144,7 @@ def render_invoice(posterior: dict, modulation: dict, seed: int, meta: dict | No
     ax.text(0.06, 0.955, "RETURN TO SENDER ADVISORY", fontsize=11.5, fontweight="bold")
     ax.text(0.06, 0.936, "Battery-waste externality accounting",
             fontsize=7.5, color="dimgray")
-    ax.text(0.06, 0.922, "Student prototype -- fictional firm", fontsize=7.5, color="dimgray")
+    ax.text(0.06, 0.922, "Student prototype; fictional firm", fontsize=7.5, color="dimgray")
     ax.text(0.94, 0.955, "EXTERNALITY INVOICE", fontsize=11.5, fontweight="bold", ha="right")
     ax.text(0.94, 0.936, f"Ref: {ref}", fontsize=8.5, ha="right", color="dimgray")
     ax.plot([0.06, 0.94], [0.910, 0.910], color="black", linewidth=1.2)
@@ -208,7 +208,7 @@ def render_invoice(posterior: dict, modulation: dict, seed: int, meta: dict | No
         facecolor="#eaf3ea", edgecolor="darkgreen", linewidth=1.4,
     ))
     ax.text(0.09, y - 0.024, "AMOUNT PAYABLE (billable floor)", fontsize=9, fontweight="bold", color="darkgreen")
-    ax.text(0.09, y - 0.055, "5th percentile of cumulative cost -- the amount defensible under conservative assumptions",
+    ax.text(0.09, y - 0.055, "5th percentile of cumulative cost: the amount defensible under conservative assumptions",
             fontsize=7.5, color="darkgreen")
     ax.text(0.91, y - box_h / 2, _money(posterior["billable_floor"]),
             fontsize=15, fontweight="bold", ha="right", va="center", color="darkgreen")
