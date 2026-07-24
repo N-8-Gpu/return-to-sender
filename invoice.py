@@ -120,7 +120,7 @@ def _money(x: float) -> str:
 
 
 def render_invoice(posterior: dict, modulation: dict, seed: int, meta: dict | None = None) -> plt.Figure:
-    """Render the externality invoice as a consulting-grade bill.
+    """Render the externality estimate as a consulting-grade illustrative assessment.
 
     meta (all optional, sensible defaults):
       'ref'      -- invoice reference string, e.g. 'RTS-2026-000'
@@ -145,12 +145,12 @@ def render_invoice(posterior: dict, modulation: dict, seed: int, meta: dict | No
     ax.text(0.06, 0.936, "Battery-waste externality accounting",
             fontsize=7.5, color="dimgray")
     ax.text(0.06, 0.922, "Student prototype; fictional firm", fontsize=7.5, color="dimgray")
-    ax.text(0.94, 0.955, "EXTERNALITY INVOICE", fontsize=11.5, fontweight="bold", ha="right")
+    ax.text(0.94, 0.955, "EXTERNALITY ASSESSMENT", fontsize=11.5, fontweight="bold", ha="right")
     ax.text(0.94, 0.936, f"Ref: {ref}", fontsize=8.5, ha="right", color="dimgray")
     ax.plot([0.06, 0.94], [0.910, 0.910], color="black", linewidth=1.2)
 
     # -- parties and period ----------------------------------------------
-    ax.text(0.06, 0.893, "BILL TO", fontsize=8, fontweight="bold", color="dimgray")
+    ax.text(0.06, 0.893, "ILLUSTRATIVE ASSESSED PARTIES", fontsize=8, fontweight="bold", color="dimgray")
     ax.text(0.06, 0.872, "Consumer Lithium-Ion Battery Producers,", fontsize=10)
     ax.text(0.06, 0.852, "via stewardship organization", fontsize=10)
     ax.text(0.56, 0.893, "PREPARED FOR", fontsize=8, fontweight="bold", color="dimgray")
@@ -200,15 +200,15 @@ def render_invoice(posterior: dict, modulation: dict, seed: int, meta: dict | No
     ax.text(0.94, y, f"{_money(posterior['billable_floor'])} - {_money(posterior['total_p95'])}",
             fontsize=8.5, color="dimgray", ha="right")
 
-    # -- payable box: the defensible floor -------------------------------
+    # -- conservative box: the defensible floor -------------------------
     y -= 0.070
     box_h = 0.075
     ax.add_patch(mpatches.FancyBboxPatch(
         (0.06, y - box_h), 0.88, box_h, boxstyle="round,pad=0.008",
         facecolor="#eaf3ea", edgecolor="darkgreen", linewidth=1.4,
     ))
-    ax.text(0.09, y - 0.024, "AMOUNT PAYABLE (billable floor)", fontsize=9, fontweight="bold", color="darkgreen")
-    ax.text(0.09, y - 0.055, "5th percentile of cumulative cost: the amount defensible under conservative assumptions",
+    ax.text(0.09, y - 0.024, "CONSERVATIVE ASSESSMENT FLOOR", fontsize=9, fontweight="bold", color="darkgreen")
+    ax.text(0.09, y - 0.055, "5th percentile of modeled cumulative cost; illustrative, not an amount currently due",
             fontsize=7.5, color="darkgreen")
     ax.text(0.91, y - box_h / 2, _money(posterior["billable_floor"]),
             fontsize=15, fontweight="bold", ha="right", va="center", color="darkgreen")
@@ -235,7 +235,7 @@ def render_invoice(posterior: dict, modulation: dict, seed: int, meta: dict | No
         notes.append("Evidence channels conditioned on: " + ", ".join(channels) + ".")
     notes += [
         "Estimates are Sequential Monte Carlo posteriors over hidden leakage, tonnage, fire intensity and material value.",
-        "Line items are posterior medians; medians are not additive, so line items need not sum to the total.",
+        "Each line item is an independently computed posterior median; medians are not additive and need not sum to the total.",
         "Fire cost anchor: continental facility-fire loss data (SOURCES.md [S4]); no per-incident municipal figure exists [U1].",
         "Landfill perpetual-care rate is an ASSUMPTION pending a PSAB landfill-liability figure [U4]; see sensitivity analysis.",
     ]
@@ -244,9 +244,9 @@ def render_invoice(posterior: dict, modulation: dict, seed: int, meta: dict | No
         ax.text(0.06, yy, "- " + note, fontsize=7.3, color="dimgray")
         yy -= 0.020
 
-    ax.text(0.5, 0.030,
-            "Synthetic demonstration by a fictional advisory firm. Not a real invoice, not financial or legal advice.",
-            fontsize=7.5, ha="center", color="dimgray", style="italic")
+        ax.text(0.5, 0.030,
+            "SYNTHETIC DEMONSTRATION · NOT AN INVOICE · NOT FINANCIAL OR LEGAL ADVICE",
+            fontsize=7.5, ha="center", color="firebrick", fontweight="bold")
 
     fig.tight_layout()
     return fig
