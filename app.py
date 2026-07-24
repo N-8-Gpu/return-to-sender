@@ -10,7 +10,7 @@ Legal pathway / Methodology & sources. Two data modes: a synthetic demo
 scenario, or an uploaded quarterly-observations CSV (a real engagement's data).
 """
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from io import BytesIO
 
 import matplotlib.pyplot as plt
@@ -28,6 +28,13 @@ from simulator import (
 )
 
 N_PARTICLES = 5000
+INK = "#202622"
+MUTED = "#66716a"
+PAPER = "#f7f7f2"
+GREEN = "#176b4d"
+GREEN_LIGHT = "#dcebe2"
+AMBER = "#c66a15"
+AMBER_LIGHT = "#f2dcc5"
 
 CHANNEL_INFO = {
     "audits": ("Waste-composition audits",
@@ -51,6 +58,113 @@ CHANNEL_INFO = {
              "Stylized battery-passport data: a direct but noisy read on leakage. The EU mandates "
              "passports for larger batteries from 2027; small consumer cells are the gap [S10]."),
 }
+
+GUIDED_SEED = 0
+
+
+@dataclass(frozen=True)
+class GuidedStage:
+    """One deterministic beat in the presenter-facing demo."""
+
+    title: str
+    short_title: str
+    description: str
+    active_channels: tuple[str, ...]
+    t_deposit: int | None = None
+
+
+GUIDED_STAGES = {
+    "sparse": GuidedStage(
+        title="1. Sparse evidence",
+        short_title="Sparse evidence",
+        description="A quarterly waste audit gives us a signal, but leaves a wide defensible range.",
+        active_channels=("audits",),
+    ),
+    "network": GuidedStage(
+        title="2. Evidence network",
+        short_title="Evidence network",
+        description="Existing records and practical sensors combine into a much sharper estimate.",
+        active_channels=("audits", "depots", "fires", "prices", "mailbox", "compactor"),
+    ),
+    "deposit": GuidedStage(
+        title="3. Deposit-return scenario",
+        short_title="Deposit-return scenario",
+        description="The same evidence network estimates the response after a modeled program begins.",
+        active_channels=("audits", "depots", "fires", "prices", "mailbox", "compactor"),
+        t_deposit=20,
+    ),
+}
+
+
+def guided_channels(stage_key: str) -> dict[str, bool]:
+    """Return a complete filter-channel mapping for a guided stage."""
+    enabled = set(GUIDED_STAGES[stage_key].active_channels)
+    return {key: key in enabled for key in CHANNEL_INFO}
+
+
+def mean_credible_band_width(engagement: dict) -> float:
+    """Mean width of the quarterly 90% leakage credible interval."""
+    quantiles = engagement["results"]["quantiles"]["phi_bar"]
+    return float(np.mean(quantiles[:, 2] - quantiles[:, 0]))
+
+
+def relative_uncertainty_reduction(baseline_width: float, current_width: float) -> float:
+    """Fractional band-width reduction; negative values honestly report widening."""
+    if baseline_width <= 0:
+        return 0.0
+    return (baseline_width - current_width) / baseline_width
+
+
+def modeled_avoided_externality(engagement: dict) -> float | None:
+    """Median no-program cost less median intervention cost, when paired data exist."""
+    baseline = engagement.get("baseline_posterior")
+    if baseline is None:
+        return None
+    return float(baseline["total_median"] - engagement["posterior"]["total_median"])
+
+
+def run_guided_stage(stage_key: str) -> dict:
+    """Run one fixed guided stage through the same cached demo pipeline."""
+    stage = GUIDED_STAGES[stage_key]
+    channels = tuple(sorted(guided_channels(stage_key).items()))
+    return run_demo_engagement(GUIDED_SEED, stage.t_deposit, 0.0, channels)
+
+
+def apply_demo_styles() -> None:
+    """Apply a restrained, projector-friendly layer over Streamlit's base theme."""
+    st.markdown(
+        """
+        <style>
+        .stApp { background: #f7f7f2; color: #202622; }
+        [data-testid="stHeader"] { background: rgba(247, 247, 242, 0.92); }
+        [data-testid="stSidebar"] { background: #202622; }
+        [data-testid="stSidebar"] * { color: #f7f7f2; }
+        [data-testid="stSidebar"] .stButton button {
+            background: #f7f7f2; color: #202622; border-color: #f7f7f2;
+        }
+        .block-container { max-width: 1180px; padding-top: 2rem; padding-bottom: 4rem; }
+        h1, h2, h3 { font-family: "Avenir Next", Avenir, "Helvetica Neue", sans-serif; letter-spacing: 0; }
+        h1 { font-size: clamp(2rem, 4vw, 3.35rem); line-height: 1.02; max-width: 900px; }
+        h2 { font-size: 1.45rem; }
+        p, li, label, [data-testid="stMetricLabel"] { font-family: Georgia, "Times New Roman", serif; }
+        [data-testid="stMetric"] {
+            background: #ffffff; border-top: 3px solid #176b4d; padding: 1rem 1.1rem;
+        }
+        [data-testid="stMetricValue"] { font-family: "Avenir Next", Avenir, sans-serif; color: #202622; }
+        .stage-kicker { color: #176b4d; font: 700 0.8rem "Avenir Next", sans-serif; text-transform: uppercase; }
+        .demo-disclosure {
+            border-left: 4px solid #c66a15; background: #fff; padding: 0.75rem 1rem; margin: 1rem 0 1.5rem;
+            font: 0.92rem Georgia, serif;
+        }
+        .stage-copy { font-size: 1.15rem; max-width: 760px; color: #465049; }
+        .stTabs [data-baseweb="tab-list"] { gap: 1.5rem; border-bottom: 1px solid #cdd2cd; }
+        .stTabs [data-baseweb="tab"] { font-family: "Avenir Next", Avenir, sans-serif; font-weight: 650; }
+        .stButton button { border-radius: 4px; min-height: 2.8rem; font-weight: 650; }
+        .stDownloadButton button { border-radius: 4px; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def _fmt_money(x: float) -> str:
@@ -130,21 +244,54 @@ def bands_chart(eng: dict) -> plt.Figure:
     t_axis = np.arange(T)
     q = results["quantiles"]["phi_bar"]
     fig, ax = plt.subplots(figsize=(9, 3.8))
-    ax.fill_between(t_axis, q[:, 0], q[:, 2], alpha=0.25, label="90% credible band")
-    ax.plot(t_axis, q[:, 1], label="Posterior median leakage")
+    ax.fill_between(t_axis, q[:, 0], q[:, 2], color=GREEN_LIGHT, alpha=0.8,
+                    label="90% credible band")
+    ax.plot(t_axis, q[:, 1], color=GREEN, linewidth=2.2, label="Estimated leakage")
     if truth is not None:
         ax.plot(t_axis, truth["phi_bar"], linestyle="--", color="black", label="True leakage (synthetic)")
         ax.axvline(cfg.regime.t_shock, color="gray", linestyle=":", linewidth=1.2)
-        ax.annotate("market shock", (cfg.regime.t_shock, ax.get_ylim()[1]), fontsize=7.5,
+        ax.annotate("market shock", (cfg.regime.t_shock, ax.get_ylim()[1]), fontsize=9,
                     color="gray", rotation=90, va="top", ha="right")
     if cfg.phi_dynamics.t_deposit is not None:
         ax.axvline(cfg.phi_dynamics.t_deposit, color="green", linestyle=":", linewidth=1.2)
-        ax.annotate("deposit begins", (cfg.phi_dynamics.t_deposit, ax.get_ylim()[1]), fontsize=7.5,
+        ax.annotate("program begins", (cfg.phi_dynamics.t_deposit, ax.get_ylim()[1]), fontsize=9,
                     color="green", rotation=90, va="top", ha="right")
     ax.set_xlabel("Quarter")
     ax.set_ylabel("Leakage fraction")
     ax.set_ylim(bottom=0)
-    ax.legend(loc="upper right", fontsize=8)
+    ax.legend(loc="upper right", fontsize=10, frameon=False)
+    fig.tight_layout()
+    return fig
+
+
+def evidence_comparison_chart(sparse: dict, network: dict) -> plt.Figure:
+    """Compare uncertainty under sparse evidence and the guided evidence network."""
+    sparse_q = sparse["results"]["quantiles"]["phi_bar"]
+    network_q = network["results"]["quantiles"]["phi_bar"]
+    truth = sparse["truth"]["phi_bar"]
+    t_axis = np.arange(len(truth))
+    reduction = relative_uncertainty_reduction(
+        mean_credible_band_width(sparse), mean_credible_band_width(network)
+    )
+
+    fig, ax = plt.subplots(figsize=(9, 4.2))
+    ax.fill_between(t_axis, sparse_q[:, 0], sparse_q[:, 2], color=AMBER_LIGHT, alpha=0.7,
+                    label="Audits only: 90% range")
+    ax.fill_between(t_axis, network_q[:, 0], network_q[:, 2], color=GREEN_LIGHT, alpha=0.95,
+                    label="Evidence network: 90% range")
+    ax.plot(t_axis, network_q[:, 1], color=GREEN, linewidth=2.2,
+            label="Evidence-network estimate")
+    ax.plot(t_axis, truth, color=INK, linestyle="--", linewidth=1.2,
+            label="Synthetic truth (hidden from estimator)")
+    ax.text(
+        0.02, 0.05, f"Average uncertainty range reduced {reduction:.0%}",
+        transform=ax.transAxes, fontsize=11, fontweight="bold", color=GREEN,
+        bbox={"boxstyle": "square,pad=0.45", "facecolor": "white", "edgecolor": GREEN},
+    )
+    ax.set_xlabel("Quarter")
+    ax.set_ylabel("Share leaking into garbage")
+    ax.set_ylim(bottom=0)
+    ax.legend(loc="upper right", fontsize=9.5, frameon=False)
     fig.tight_layout()
     return fig
 
@@ -154,40 +301,236 @@ def cumulative_cost_chart(eng: dict) -> plt.Figure:
     T = len(post["cumulative_median"])
     t_axis = np.arange(T)
     fig, ax = plt.subplots(figsize=(9, 3.2))
-    ax.fill_between(t_axis, post["cumulative_p05"], post["cumulative_p95"], alpha=0.2,
-                    label="90% credible band")
-    ax.plot(t_axis, post["cumulative_median"], label="Cumulative externality (median)")
-    ax.plot(t_axis, post["cumulative_p05"], color="darkgreen", linewidth=1.2, linestyle="--",
-            label="Billable floor (5th pct)")
+    ax.fill_between(t_axis, post["cumulative_p05"], post["cumulative_p95"],
+                    color=GREEN_LIGHT, alpha=0.8, label="90% credible band")
+    ax.plot(t_axis, post["cumulative_median"], color=GREEN, linewidth=2.3,
+            label="Current scenario (median)")
+    ax.plot(t_axis, post["cumulative_p05"], color=GREEN, linewidth=1.2, linestyle="--",
+            label="Conservative floor (5th pct)")
+    baseline = eng.get("baseline_posterior")
+    if baseline is not None:
+        ax.plot(t_axis, baseline["cumulative_median"], color=AMBER, linewidth=2,
+                label="No-program scenario (median)")
+        ax.fill_between(t_axis, post["cumulative_median"], baseline["cumulative_median"],
+                        color=AMBER_LIGHT, alpha=0.45, label="Modeled avoided externality")
     ax.set_xlabel("Quarter")
     ax.set_ylabel("Cumulative cost ($)")
-    ax.legend(loc="upper left", fontsize=8)
+    ax.legend(loc="upper left", fontsize=9.5, frameon=False)
     fig.tight_layout()
     return fig
 
 
 def n_eff_chart(eng: dict) -> plt.Figure:
-    n_eff = eng["results"]["n_eff"]
+    n_eff = eng["results"]["n_eff"] / N_PARTICLES
     fig, ax = plt.subplots(figsize=(9, 1.8))
-    ax.plot(np.arange(len(n_eff)), n_eff)
-    ax.axhline(N_PARTICLES / 2, color="firebrick", linestyle=":", linewidth=1,
-               label="resampling threshold (N/2)")
+    ax.plot(np.arange(len(n_eff)), n_eff, color=GREEN)
+    ax.axhline(0.5, color=AMBER, linestyle=":", linewidth=1.3,
+               label="Refresh particles below this line")
     ax.set_xlabel("Quarter")
-    ax.set_ylabel("N_eff")
-    ax.legend(fontsize=7.5)
+    ax.set_ylabel("Particle fit")
+    ax.set_ylim(0, 1.05)
+    ax.legend(fontsize=9, frameon=False)
     fig.tight_layout()
     return fig
 
 
-def main() -> None:
+def render_guided_invoice(eng: dict) -> None:
+    """Render the assessment, downloads, and optional assumption sweep."""
+    cfg, post = eng["cfg"], eng["posterior"]
+    T = cfg.geography.n_quarters
+    modulation = inv.modulation_table(post["total_median"], post["total_leaked_tonnage"], cfg)
+    meta = {
+        "ref": f"RTS-DEMO-{cfg.seed:03d}",
+        "period": f"Quarters 1-{T} ({T/4:.0f}-year horizon)",
+        "basis": "Synthetic scenario calibrated to cited anchors",
+        "channels": [key for key, active in eng["active"].items() if active],
+    }
+    invoice_fig = inv.render_invoice(post, modulation, seed=cfg.seed, meta=meta)
+    st.pyplot(invoice_fig)
+
+    png_buffer = BytesIO()
+    pdf_buffer = BytesIO()
+    invoice_fig.savefig(png_buffer, format="png", dpi=200, bbox_inches="tight")
+    invoice_fig.savefig(pdf_buffer, format="pdf", bbox_inches="tight")
+    download_png, download_pdf, _ = st.columns([1, 1, 2])
+    download_png.download_button(
+        "Download PNG", png_buffer.getvalue(),
+        file_name=f"externality-assessment-{meta['ref']}.png", mime="image/png",
+    )
+    download_pdf.download_button(
+        "Download PDF", pdf_buffer.getvalue(),
+        file_name=f"externality-assessment-{meta['ref']}.pdf", mime="application/pdf",
+    )
+
+    with st.expander("Test the cost assumptions"):
+        st.caption(
+            "The municipal cost per fire and landfill perpetual-care rate are not yet locally "
+            "verified. Change either assumption; the same leakage posterior is reused."
+        )
+        u_f = st.slider("Cost per fire incident ($)", 50_000, 2_000_000, int(cfg.invoice.u_f),
+                        step=50_000, key="guided_sens_uf")
+        u_lf = st.slider("Landfill perpetual care ($/tonne)", 50, 500, int(cfg.invoice.u_lf),
+                         step=10, key="guided_sens_ulf")
+        cfg_sens = replace(cfg, invoice=replace(cfg.invoice, u_f=float(u_f), u_lf=float(u_lf)))
+        post_sens = inv.compute_cost_posterior(eng["results"], cfg_sens)
+        sens_median, sens_floor, sens_fire = st.columns(3)
+        sens_median.metric("Median estimate", _fmt_money(post_sens["total_median"]))
+        sens_floor.metric("Conservative floor", _fmt_money(post_sens["billable_floor"]))
+        sens_fire.metric("Fire-loss estimate", _fmt_money(post_sens["fire_total"]))
+
+
+def render_guided_app() -> None:
+    """Render the deterministic, presenter-facing three-stage experience."""
+    st.markdown('<div class="stage-kicker">Return to Sender Advisory / Live prototype</div>',
+                unsafe_allow_html=True)
+    st.title("Make hidden battery waste costs visible")
+    st.caption("A synthetic proof of concept for provincial stewardship decisions")
+    st.markdown(
+        '<div class="demo-disclosure"><strong>Demonstration basis.</strong> The scenario is '
+        'synthetic, seeded for reproducibility, and calibrated to cited public anchors. It is '
+        'not a real invoice or a claim of legal authority.</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.session_state.setdefault("guided_stage", "sparse")
+    st.markdown("**Move through the three demo stages**")
+    stage_columns = st.columns(3)
+    for column, (stage_key, stage) in zip(stage_columns, GUIDED_STAGES.items()):
+        if column.button(
+            stage.title,
+            key=f"guided_stage_{stage_key}",
+            type="primary" if st.session_state["guided_stage"] == stage_key else "secondary",
+            use_container_width=True,
+        ):
+            st.session_state["guided_stage"] = stage_key
+
+    stage_key = st.session_state["guided_stage"]
+    stage = GUIDED_STAGES[stage_key]
+    with st.spinner(f"Loading {stage.short_title.lower()}..."):
+        eng = run_guided_stage(stage_key)
+
+    st.markdown(f'<div class="stage-kicker">Current stage / {stage.title}</div>',
+                unsafe_allow_html=True)
+    st.markdown(f'<p class="stage-copy">{stage.description}</p>', unsafe_allow_html=True)
+
+    post = eng["posterior"]
+    avoided = modeled_avoided_externality(eng)
+    metric_1, metric_2, metric_3, metric_4 = st.columns(4)
+    metric_1.metric("Estimated leaked mass", f"{post['total_leaked_tonnage']:,.0f} t")
+    metric_2.metric("Median externality", _fmt_money(post["total_median"]))
+    metric_3.metric("Conservative floor", _fmt_money(post["billable_floor"]))
+    if avoided is None:
+        metric_4.metric("Expected fire incidents", f"{post['expected_fires_total']:,.0f}")
+    else:
+        metric_4.metric("Modeled avoided cost", _fmt_money(avoided))
+
+    tab_case, tab_evidence, tab_invoice, tab_appendix = st.tabs(
+        ["1. The case", "2. Evidence", "3. Externality assessment", "Appendix"]
+    )
+
+    with tab_case:
+        if stage_key == "sparse":
+            st.markdown(
+                "### The damage is real; its scale is hard to observe\n"
+                "Batteries discarded in ordinary waste can start facility fires, consume landfill "
+                "capacity, and destroy recoverable material value. A single audit program detects "
+                "the problem, but leaves a wide range around how much is leaking."
+            )
+        elif stage_key == "network":
+            st.markdown(
+                "### Existing records become an evidence network\n"
+                "Waste audits, depot intake, fire logs, market prices, mail-back returns, and "
+                "compactor detections describe the same hidden flow from different angles. The "
+                "model combines them without pretending any one source is perfect."
+            )
+        else:
+            st.markdown(
+                "### A program can be tested against the no-program scenario\n"
+                "At quarter 20, the model introduces a deposit-return program. The comparison uses "
+                "the same seeded latent noise in both scenarios, isolating the modeled program "
+                "response without presenting it as empirical causal proof."
+            )
+        st.markdown("**Cumulative externality over the ten-year scenario**")
+        st.pyplot(cumulative_cost_chart(eng))
+
+    with tab_evidence:
+        if stage_key == "sparse":
+            st.markdown(
+                "### One signal leaves room for dispute\n"
+                "The shaded region is the model's 90% credible range. The dashed synthetic truth is "
+                "shown to us for validation, but remains hidden from the estimator."
+            )
+            st.pyplot(bands_chart(eng))
+            st.metric("Average 90% uncertainty range", f"{mean_credible_band_width(eng):.1%}")
+        else:
+            sparse_eng = run_guided_stage("sparse")
+            network_eng = run_guided_stage("network")
+            sparse_width = mean_credible_band_width(sparse_eng)
+            network_width = mean_credible_band_width(network_eng)
+            reduction = relative_uncertainty_reduction(sparse_width, network_width)
+            st.markdown(
+                "### More independent evidence sharpens the defensible range\n"
+                "Both estimates face the same synthetic reality. The only change is which evidence "
+                "channels the estimator is allowed to use."
+            )
+            st.pyplot(evidence_comparison_chart(sparse_eng, network_eng))
+            evidence_1, evidence_2, evidence_3 = st.columns(3)
+            evidence_1.metric("Audits-only range", f"{sparse_width:.1%}")
+            evidence_2.metric("Network range", f"{network_width:.1%}")
+            evidence_3.metric("Range reduction", f"{reduction:.0%}")
+
+        active_list = [CHANNEL_INFO[key][0] for key, active in eng["active"].items() if active]
+        st.markdown("**Evidence in this stage:** " + ", ".join(active_list))
+        with st.expander("How the estimator works, in four verbs"):
+            st.markdown(
+                "**Guess:** advance 5,000 plausible hidden states.  "
+                "**Weight:** score each against the observed evidence.  "
+                "**Normalize:** turn scores into probabilities.  "
+                "**Refresh:** replace implausible particles when the cloud becomes too concentrated."
+            )
+
+    with tab_invoice:
+        st.markdown(
+            "### Turn an estimate into a transparent assessment\n"
+            "The conservative floor is the 5th percentile of cumulative modeled cost. It is shown "
+            "alongside the full range and every material assumption, not as a real amount due."
+        )
+        render_guided_invoice(eng)
+
+    with tab_appendix:
+        st.markdown(
+            "### What is proven, modeled, and still unknown\n"
+            "**Proven in tests:** the filter tracks stable truth, detects a market regime change, "
+            "and its 90% interval has empirical coverage across seeded scenarios.\n\n"
+            "**Modeled:** a single city, two battery design classes, 40 quarters, and a deposit "
+            "response calibrated to a cited capture-rate ceiling.\n\n"
+            "**Still open:** Calgary-specific fire cost, landfill perpetual-care cost, and authority "
+            "for damage-based producer fees. These remain labeled assumptions or legal questions."
+        )
+        st.markdown("**Filter health**")
+        st.pyplot(n_eff_chart(eng))
+        with st.expander("Source register"):
+            st.markdown(
+                "- **S1-S3:** Calgary fire frequency and battery-crushing mechanism.\n"
+                "- **S4-S7:** continental facility-fire costs and disruption.\n"
+                "- **S10-S12:** battery passports, stewardship reporting, and waste audits.\n"
+                "- **S13-S14:** Nova Scotia deposit-return performance and EPR pathway.\n"
+                "- **U1, U3, U4:** local fire cost, legal authority, and landfill cost remain open.\n\n"
+                "Full citations and links are maintained in `SOURCES.md`."
+            )
+        with st.expander("Producer-level reconciliation roadmap"):
+            st.markdown(
+                "The simulator includes brand tallies among proper returns. A future version could "
+                "estimate producer-specific leakage after real sales and return data are available; "
+                "v1 does not use these tallies in the filter."
+            )
+
+
+def render_advanced_app() -> None:
     """Render the page. Split out so importing app.py (e.g. from tests) is side-effect-free."""
-    st.set_page_config(page_title="Return to Sender Advisory", page_icon="🔋", layout="wide")
     # ============================= sidebar =====================================
 
     with st.sidebar:
-        st.markdown("**RETURN TO SENDER ADVISORY**")
-        st.caption("Fictional student-prototype firm. Synthetic demonstration; not advice.")
-
         mode = st.radio("Data source", ["Demo mode (synthetic scenario)", "Client data upload (CSV)"],
                         key="mode_radio")
         upload_mode = mode.startswith("Client")
@@ -275,7 +618,7 @@ def main() -> None:
 
     **The demonstration argument.** Turn programs on one at a time and watch the uncertainty band
     around the leakage estimate shrink. Every program the client commissions doesn't just collect
-    batteries; it raises the amount that can be defensibly billed.
+    batteries; it can tighten the range available for a proportionate, evidence-based assessment.
             """
         )
         st.stop()
@@ -300,7 +643,7 @@ def main() -> None:
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Leaked tonnage (median)", f"{post['total_leaked_tonnage']:,.0f} t")
         c2.metric("Externality estimate (median)", _fmt_money(post["total_median"]))
-        c3.metric("Billable floor (payable)", _fmt_money(post["billable_floor"]))
+        c3.metric("Conservative floor (illustrative)", _fmt_money(post["billable_floor"]))
         c4.metric("Expected fire incidents", f"{post['expected_fires_total']:,.0f}")
 
         if eng["baseline_posterior"] is not None:
@@ -318,11 +661,11 @@ def main() -> None:
     **{_fmt_money(post['total_median'])}**, of which **{_fmt_money(post['billable_floor'])}** is
     defensible under conservative assumptions (5th percentile).
 
-    **Recommendation.** Adopt the billable floor as the producer assessment for this period,
-    modulated by design class (embedded vs. removable; see the invoice's fee schedule). Each
-    additional evidence program narrows the credible interval (currently spanning
-    {band_rel:.0%} of the median estimate) and raises the defensible floor; the marginal case for
-    commissioning data is that **measurement is revenue**.
+    **Recommendation.** Use the conservative floor as a planning benchmark while local costs and
+    legal authority are validated, with design-class modulation shown as a policy option. Each
+    additional evidence program can narrow the credible interval (currently spanning
+    {band_rel:.0%} of the median estimate) and change the floor when the observations support it;
+    the value of measurement is a more proportionate and transparent assessment.
             """
         )
         st.markdown("**Exhibit A: cumulative externality and the billable floor**")
@@ -346,10 +689,10 @@ def main() -> None:
        nearly guessing, and so is any fee it tries to defend.
     2. **Add the mail-back pilot, then compactor sensors.** The band visibly narrows around
        the same underlying truth. More evidence, same reality, sharper number.
-    3. **Switch on the deposit program.** Leakage bends downward a few quarters later;
-       the estimator catches the change without being told.
-    4. **Open the invoice tab.** The extra programs didn't change what leaked; they raised
-       the amount that can be *defensibly billed*. Measurement is revenue.
+     3. **Switch on the deposit program.** Leakage bends downward a few quarters later;
+         after being given the program start, the estimator uses evidence to estimate the response.
+     4. **Open the invoice tab.** The evidence programs did not change the synthetic reality;
+         they tightened the range used to calculate a conservative illustrative floor.
                 """
             )
 
@@ -518,5 +861,28 @@ def main() -> None:
         )
 
 
+def main() -> None:
+    """Choose between the presenter path and the full analysis workbench."""
+    st.set_page_config(page_title="Return to Sender Advisory", page_icon="🔋", layout="wide")
+    apply_demo_styles()
+    with st.sidebar:
+        st.markdown("**RETURN TO SENDER ADVISORY**")
+        st.caption("Battery-waste externality accounting / student prototype")
+        experience = st.radio(
+            "Experience",
+            ["Guided demo", "Advanced analysis"],
+            help="Guided demo is the deterministic ten-minute presentation. Advanced analysis "
+                 "exposes CSV upload, every evidence channel, seeds, and timing controls.",
+        )
+        if experience == "Guided demo":
+            st.info("Three fixed stages · Seed 0 · Synthetic data")
+
+    if experience == "Guided demo":
+        render_guided_app()
+    else:
+        render_advanced_app()
+
+
 if runtime.exists():  # streamlit run / AppTest; bare imports skip rendering
     main()
+
